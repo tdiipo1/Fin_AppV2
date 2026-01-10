@@ -1,0 +1,6 @@
+nicegui
+sqlalchemy
+pandas
+python-dotenv
+google-generativeai
+paramiko

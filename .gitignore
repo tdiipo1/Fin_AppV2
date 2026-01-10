@@ -1,0 +1,13 @@
+__pycache__/
+*.db
+!finapp_v2.db
+# Ignore the actual db if we want data to be purely local and not in git, 
+# usually people don't commit their production DB. 
+# But user said "just connects to my database", implying data is separate.
+# However, for a "template" repo, we ignore the running DB.
+finapp_v2.db
+backups/
+.env
+.venv
+venv/
+*.log
