@@ -3,7 +3,34 @@ import hashlib
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from ..database.models import Transaction, Category, MappingRule
+from database.models import Transaction, Category, MerchantMap, CategoryMap, ExclusionRule
+import re
+
+def check_exclusion(description: str, rules: list) -> bool:
+    """
+    Checks if a description matches any exclusion rules.
+    rules: list of ExclusionRule objects
+    """
+    if not description:
+        return False
+        
+    for rule in rules:
+        if not rule.is_active:
+            continue
+            
+        if rule.rule_type == 'exact_match':
+            if rule.value.lower() == description.lower():
+                return True
+        elif rule.rule_type == 'contains': # New support
+            if rule.value.lower() in description.lower():
+                return True
+        elif rule.rule_type == 'regex':
+            try:
+                if re.search(rule.value, description, re.IGNORECASE):
+                    return True
+            except re.error:
+                continue # Skip invalid regex
+    return False
 
 def generate_fingerprint(date_dt: datetime, amount: float, description: str):
     """
@@ -44,26 +71,38 @@ def normalize_bank_row(row, cols_map):
     if not date_val:
         return None
 
+    # 4. TYPE Parsing (Moved up to support Amount logic)
+    txn_type = ""
+    for k in ['transaction type', 'type', 'details', 'd/c', 'dr/cr', 'sign']:
+        val = row.get(cols_map.get(k))
+        if pd.notna(val):
+            txn_type = str(val).strip()
+            break
+
     # 2. AMOUNT Parsing
-    # Logic: 
-    # - If 'Amount' exists, use it.
-    # - If 'Debit' and 'Credit' exist, combine them.
     amount = 0.0
+    amount_sign_fixed = False
+    amount_parsed_successfully = False
     
     # Check for direct Amount column
     amt_col = cols_map.get('amount') or cols_map.get('transaction amount')
-    if amt_col and pd.notna(row.get(amt_col)):
-        # Clean currency symbols if any (though pandas read_csv usually handles types, sometimes strings sneak in)
+    if amt_col:
         val = row.get(amt_col)
-        if isinstance(val, str):
-            val = val.replace('$','').replace(',','')
-        try:
-            amount = float(val)
-        except:
-            amount = 0.0
+        if pd.notna(val) and str(val).strip() != '':
+            if isinstance(val, str):
+                val = val.replace('$','').replace(',','').replace(' ','')
+                # Handle parenthesis negations (100.00) -> -100.00
+                if '(' in val and ')' in val:
+                     val = '-' + val.replace('(','').replace(')','')
+            try:
+                amount = float(val)
+                amount_parsed_successfully = True
+            except:
+                pass
     
     # Check for Split Debit/Credit columns (Common in BECU, Capital One)
-    elif cols_map.get('debit') or cols_map.get('credit'):
+    # Use if Amount col was missing OR it failed to parse/was empty
+    if not amount_parsed_successfully and (cols_map.get('debit') or cols_map.get('credit')):
         debit_val = 0.0
         credit_val = 0.0
         
@@ -75,7 +114,7 @@ def normalize_bank_row(row, cols_map):
                 if isinstance(val, str):
                     val = val.replace('$','').replace(',','')
                 try:
-                    debit_val = abs(float(val)) # Treat debit as abs magnitude
+                    debit_val = abs(float(val)) 
                 except:
                     pass
 
@@ -91,10 +130,23 @@ def normalize_bank_row(row, cols_map):
                 except:
                     pass
         
-        # Calculate Net Amount (Income = Positive, Expense = Negative)
-        # If Debit is present, it's an outflow (-)
-        # If Credit is present, it's an inflow (+)
-        amount = credit_val - debit_val
+        # Only use this if we actually found something
+        # Explicit check prevents overwriting if just one column exists but is empty
+        if debit_val != 0 or credit_val != 0:
+             amount = credit_val - debit_val
+             amount_sign_fixed = True
+        # Edge case: Both zero but columns exist - likely a $0.00 transaction or transfer
+        elif pd.notna(row.get(d_col)) or pd.notna(row.get(c_col)):
+            amount = credit_val - debit_val # 0.0
+            amount_sign_fixed = True
+
+    # SIGN CORRECTION using Type (if not already fixed by split cols)
+    if not amount_sign_fixed and amount != 0:
+        t_lower = txn_type.lower()
+        if t_lower in ['debit', 'dr', 'withdrawal', 'outflow', 'sale', 'payment', 'fee']:
+            amount = -abs(amount)
+        elif t_lower in ['credit', 'cr', 'deposit', 'inflow', 'refund']:
+            amount = abs(amount)
 
     # 3. DESCRIPTION Parsing
     # Priority: Description > Transaction Description > Merchant
@@ -103,14 +155,6 @@ def normalize_bank_row(row, cols_map):
         val = row.get(cols_map.get(k))
         if pd.notna(val):
             desc = str(val).strip()
-            break
-            
-    # 4. TYPE Parsing
-    txn_type = ""
-    for k in ['transaction type', 'type', 'details']:
-        val = row.get(cols_map.get(k))
-        if pd.notna(val):
-            txn_type = str(val).strip()
             break
             
     # 5. ACCOUNT NAME (Source)
@@ -138,38 +182,78 @@ def normalize_bank_row(row, cols_map):
     }
 
 
-def import_csv_transactions(db: Session, csv_path: str, source_label="csv"):
+def import_transactions_from_df(db: Session, df: pd.DataFrame, source_label="csv"):
     """
-    Reads a Bank CSV, detects schema, handles variations (Debit/Credit vs Amount),
-    and inserts into DB with SimpleFin-compatible fields.
+    Imports transactions from a Pandas DataFrame, applying mappings and fingerprinting.
+    Returns a dict with statistics.
     """
-    try:
-        # Read without header assumption first to inspect? No, assume standard header rows.
-        df = pd.read_csv(csv_path)
-    except Exception as e:
-        print(f"Error reading CSV {csv_path}: {e}")
-        return 0, 0
+    # 1. Load Mappings
+    merchant_rules = {m.raw_description: m.standardized_merchant for m in db.query(MerchantMap).all()}
+    category_rules = {c.unmapped_description: c.scsc_id for c in db.query(CategoryMap).all()}
+    exclusion_rules = db.query(ExclusionRule).filter(ExclusionRule.is_active == True).all()
 
     # Create a lower-case map of columns for loose matching
     cols_map = {c.lower().strip(): c for c in df.columns}
     
-    added = 0
-    skipped = 0
+    # Track fingerprints seen in this specific batch to avoid duplicates within the CSV itself
+    batch_fingerprints = set()
+
+    stats = {
+        'total_rows': len(df),
+        'added': 0,
+        'skipped': 0,
+        'existing': 0,
+        'errors': 0,
+        'skipped_details': [],
+        'error_details': []
+    }
 
     for idx, row in df.iterrows():
         try:
             norm_data = normalize_bank_row(row, cols_map)
+            
             if not norm_data:
+                stats['skipped'] += 1
+                stats['skipped_details'].append(f"Row {idx+2}: Could not parse date or required fields.")
                 continue
+            
+            # --- Apply Mappings ---
+            
+            # 1. Merchant Map (Raw Description -> Standardized Merchant)
+            # Use raw description from normalization
+            raw_desc = norm_data['raw_description']
+            std_merchant = merchant_rules.get(raw_desc)
+            if not std_merchant:
+                # Fallback: if no rule, default standardized merchant can be the clean description or empty
+                std_merchant = None 
 
+            # 2. Category Map (Description -> Category ID)
+            # Logic: We often map based on the 'Unmapped Description' field in CSV which corresponds to 'raw_description' 
+            # OR the cleaned description. The requirements say 'CategoryMap (Description -> SCSC_ID)'.
+            # Let's try to match the exact raw description first, as that's usually most reliable for rules.
+            cat_id = category_rules.get(raw_desc)
+            
             # Generate Fingerprint
             fp = generate_fingerprint(norm_data['date'], norm_data['amount'], norm_data['description'])
             
             # Check for matches
-            # 1. Check existing CSV fingerprints
+            # 1. Check if we already processed this fingerprint in this batch (duplicate in CSV)
+            if fp in batch_fingerprints:
+                stats['skipped'] += 1
+                stats['skipped_details'].append(f"Row {idx+2}: Duplicate within file (Fingerprint clash).")
+                continue
+            
+            # Check Exclusion
+            is_excluded = check_exclusion(norm_data['description'], exclusion_rules)
+
+            # 2. Check existing DB fingerprints
             existing = db.query(Transaction).filter(Transaction.fingerprint == fp).first()
             if existing:
-                skipped += 1
+                # If existing, we could potentially update the exclusion status if rules changed?
+                # For now, let's leave it. If user wants to re-apply rules, they can use the UI tool.
+                stats['skipped'] += 1
+                stats['existing'] += 1
+                # We typically don't log every existing transaction as "error" but we can track count
                 continue
                 
             # Create Transaction
@@ -178,27 +262,54 @@ def import_csv_transactions(db: Session, csv_path: str, source_label="csv"):
                 date=norm_data['date'],
                 amount=norm_data['amount'],
                 description=norm_data['description'],
-                raw_description=norm_data['raw_description'],
+                raw_description=raw_desc,
                 clean_description=norm_data['description'], # Start with raw
+                standardized_merchant=std_merchant,
+                category_id=cat_id,
                 type=norm_data['type'],
                 account_name=norm_data['account_name'],
-                import_method='csv'
+                import_method="csv",
+                source_file=source_label,
+                is_excluded=is_excluded
             )
             
             db.add(new_tx)
-            added += 1
+            batch_fingerprints.add(fp)
+            stats['added'] += 1
             
         except Exception as e:
-            print(f"Error importing row {idx}: {e}")
+            stats['errors'] += 1
+            stats['error_details'].append(f"Row {idx+2} Error: {str(e)}")
             continue
 
     try:
         db.commit()
     except Exception as e:
-        print(f"Commit failed: {e}")
+        stats['error_details'].append(f"Batch Commit Failed: {str(e)}")
         db.rollback()
         
-    return added, skipped
+    return stats
+
+
+def import_csv_transactions(db: Session, csv_path: str, source_label="csv"):
+    """
+    Reads a Bank CSV, detects schema, handles variations (Debit/Credit vs Amount),
+    and inserts into DB with SimpleFin-compatible fields.
+    """
+    try:
+        # Read without header assumption first to inspect? No, assume standard header rows.
+        df = pd.read_csv(csv_path)
+        return import_transactions_from_df(db, df, source_label)
+    except Exception as e:
+        return {
+            'total_rows': 0,
+            'added': 0,
+            'skipped': 0,
+            'existing': 0,
+            'errors': 1,
+            'skipped_details': [],
+            'error_details': [f"Critical CSV Error {csv_path}: {str(e)}"]
+        }
 
 def sync_simplefin_data_list(db: Session, transactions_json: list):
     """
@@ -246,6 +357,7 @@ def sync_simplefin_data_list(db: Session, transactions_json: list):
             if sf_id: existing_fp.simplefin_id = sf_id
             existing_fp.account_name = account # Update account name to official one
             existing_fp.import_method = "simplefin_merge"
+            existing_fp.source_file = "SimpleFin" # Update source per user request
             if item.get('pending') is False:
                  pass # Could update status
             merged += 1
@@ -260,6 +372,7 @@ def sync_simplefin_data_list(db: Session, transactions_json: list):
                 clean_description=desc,
                 account_name=account,
                 import_method="simplefin_api",
+                source_file="SimpleFin",
                 type=item.get('type', '')
             )
             db.add(new_tx)

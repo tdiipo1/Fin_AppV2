@@ -1,4 +1,5 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 import os
 
@@ -6,6 +7,19 @@ import os
 DB_FOLDER = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(DB_FOLDER, "..", "finapp_v2.db")
 DATABASE_URL = f"sqlite:///{DB_FILE}"
+
+# Enable Write-Ahead Logging (WAL) for better concurrency
+@event.listens_for(Engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        # Pass silently if we can't set WAL (e.g. database locked)
+        # It's better to run without WAL than to crash on startup
+        pass
+    finally:
+        cursor.close()
 
 # Create the engine
 engine = create_engine(

@@ -1,9 +1,14 @@
 from nicegui import ui
+from ui.state import filter_sidebar
 
 def frame(active_tab: str, content_func):
     """
     Standard App Shell with Navigation.
     """
+    # Initialize Filter Sidebar only for relevant tabs
+    if active_tab in ['dashboard', 'intelligence']:
+        filter_sidebar()
+
     with ui.header().classes('bg-slate-900 text-white items-center h-16 px-4 shadow-md'):
         ui.icon('savings', size='32px').classes('mr-2')
         ui.label('FinApp V2').classes('text-xl font-bold tracking-tight')
@@ -18,11 +23,17 @@ def frame(active_tab: str, content_func):
                     ui.icon(icon_name).classes(f'{color}')
                     ui.label(label).classes(f'{color} font-medium')
         
-        with ui.row().classes('gap-6'):
+        with ui.row().classes('gap-6 items-center'):
             nav_link('Dashboard', '/', 'dashboard', active_tab == 'dashboard')
+            nav_link('Analytics', '/intelligence', 'insights', active_tab == 'intelligence')
             nav_link('Transactions', '/transactions', 'receipt_long', active_tab == 'transactions')
             nav_link('Import', '/import', 'upload_file', active_tab == 'import')
-            nav_link('Settings', '/settings', 'settings', active_tab == 'settings')
+            nav_link('Mappings', '/mappings', 'map', active_tab == 'mappings')
+            nav_link('Exclusions', '/excluded', 'visibility_off', active_tab in ['excluded', 'batch_exclude'])
+            
+            # Dark Mode Toggle (Beta)
+            dm = ui.dark_mode()
+            ui.switch('Dark Mode', on_change=dm.toggle).props('color=blue-400 keep-color')
 
     with ui.column().classes('w-full max-w-7xl mx-auto p-6 bg-slate-50 min-h-screen'):
         content_func()

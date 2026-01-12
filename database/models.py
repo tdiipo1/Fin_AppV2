@@ -7,18 +7,50 @@ import hashlib
 class Category(Base):
     __tablename__ = "categories"
 
-    id = Column(Integer, primary_key=True, index=True)
-    scsc_id = Column(String, unique=True, index=True) # e.g. "Housing::Rent::Base"
+    id = Column(String, primary_key=True, index=True) # e.g. "SCSC0001"
     section = Column(String, nullable=False)
     category = Column(String, nullable=False)
     subcategory = Column(String, nullable=True)
 
     transactions = relationship("Transaction", back_populates="category")
-    mappings = relationship("MappingRule", back_populates="category")
+    category_maps = relationship("CategoryMap", back_populates="category")
+    budgets = relationship("Budget", back_populates="category")
 
     def __repr__(self):
-        return f"<Category {self.scsc_id}>"
+        return f"<Category {self.id} - {self.category}>"
 
+class MerchantMap(Base):
+    __tablename__ = "merchant_maps" # Name not specified, but plural is standard
+    
+    id = Column(Integer, primary_key=True, index=True)
+    raw_description = Column(String, unique=True, nullable=False, index=True)
+    standardized_merchant = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    notes = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True)
+
+class CategoryMap(Base):
+    __tablename__ = "category_maps"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    unmapped_description = Column(String, unique=True, nullable=False, index=True)
+    scsc_id = Column(String, ForeignKey("categories.id"), nullable=False, index=True)
+    source = Column(String, default='manual') # 'manual', 'ai', 'import'
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    is_active = Column(Boolean, default=True)
+    
+    category = relationship("Category", back_populates="category_maps")
+
+class Budget(Base):
+    __tablename__ = "budgets"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    scsc_id = Column(String, ForeignKey("categories.id"), nullable=False)
+    amount = Column(Float, nullable=False)
+    
+    category = relationship("Category", back_populates="budgets")
 
 class Transaction(Base):
     __tablename__ = "transactions"
@@ -27,7 +59,8 @@ class Transaction(Base):
     
     # Validation / Linking
     simplefin_id = Column(String, unique=True, nullable=True, index=True)
-    fingerprint = Column(String, unique=True, nullable=False, index=True) # SHA256 of date+amount+desc
+    # Removed unique=True to allow valid duplicates (e.g. 2 identical purchases) if IDs differ
+    fingerprint = Column(String, unique=False, nullable=False, index=True) 
     
     # Core Data
     date = Column(DateTime, nullable=False, index=True)
@@ -41,16 +74,24 @@ class Transaction(Base):
     # 'import_method' = how it got here ('csv', 'simplefin_api', 'manual')
     account_name = Column(String, nullable=True, index=True) 
     import_method = Column(String, default="csv") 
+    source_file = Column(String, nullable=True) # Filename for CSVs, or 'SimpleFin' for API
+ 
     
     # AI/Normalization
     clean_description = Column(String, nullable=True)
-    standardized_merchant = Column(String, nullable=True)
+    standardized_merchant = Column(String, nullable=True, index=True)
+    is_excluded = Column(Boolean, default=False, index=True)
     
+    # Validation / Linking
+    merchant_map_id = Column(Integer, ForeignKey("merchant_maps.id"), nullable=True)
+    category_map_id = Column(Integer, ForeignKey("category_maps.id"), nullable=True)
+
     # Foreign Keys
-    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
+    category_id = Column(String, ForeignKey("categories.id"), nullable=True, index=True) # This is scsc_id alias effectively
     
-    # Relationships
     category = relationship("Category", back_populates="transactions")
+    # merchant_map = relationship("MerchantMap") # Optional loop back
+    # category_map = relationship("CategoryMap") # Optional loop back
 
     @staticmethod
     def generate_fingerprint(date_str: str, amount: float, description: str) -> str:
@@ -67,29 +108,13 @@ class Transaction(Base):
     def __repr__(self):
         return f"<Transaction {self.date} - {self.description} - {self.amount}>"
 
-
-class MappingRule(Base):
-    """
-    Stores learned associations between raw descriptions and categories/merchants.
-    Used for the AI 'Memory'.
-    """
-    __tablename__ = "mapping_rules"
+class ExclusionRule(Base):
+    __tablename__ = "exclusion_rules"
 
     id = Column(Integer, primary_key=True, index=True)
-    
-    # The trigger
-    raw_text_pattern = Column(String, unique=True, nullable=False, index=True) # The description to match
-    
-    # The result
-    target_merchant = Column(String, nullable=True)
-    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
-    
-    # Meta
-    is_regex = Column(Boolean, default=False)
-    confidence = Column(Float, default=1.0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    category = relationship("Category", back_populates="mappings")
+    rule_type = Column(String, nullable=False, default='exact_match') # 'exact_match', 'regex', 'category'
+    value = Column(String, nullable=False, unique=True)
+    is_active = Column(Boolean, default=True)
 
 class SystemLog(Base):
     """
