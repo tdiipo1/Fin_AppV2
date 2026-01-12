@@ -8,7 +8,6 @@ def get_monthly_net_income(db: Session, months=12, include_excluded=False):
     """
     Returns monthly Income vs Expense aggregation for the last `months` months.
     """
-    # Group by Year-Month - SQLite strftime('%Y-%m', date)
     trunc_date = func.strftime('%Y-%m', Transaction.date).label('month')
     
     query = db.query(
@@ -151,7 +150,7 @@ def get_monthly_transactions(db: Session, year: int, month: int, type: str, incl
         
     return query.order_by(Transaction.date.desc()).all()
 
-# --- New Budget Analytics ---
+# --- Budget Analytics ---
 
 def calculate_category_baselines(db: Session, months: int = 12) -> dict:
     """
@@ -181,7 +180,6 @@ def calculate_category_baselines(db: Session, months: int = 12) -> dict:
         annual_projection = avg_monthly_spend * 12
         
         # Round to nearest 100 as requested
-        # e.g. 1140 -> 1100, 1160 -> 1200
         rounded_annual = round(annual_projection / 100) * 100
         
         baselines[r[0]] = rounded_annual
@@ -195,11 +193,10 @@ def get_budget_comparison(db: Session, start_date: datetime, end_date: datetime,
     We must scale them to the requested time period.
     """
     # Calculate Time Factor (Ratio of Year)
-    # Simple approximation: days / 365
     days = (end_date - start_date).days
     year_ratio = days / 365.0
     
-    # Alternatively, if it's roughly 1 month (28-31 days), force 1/12 for cleanliness
+    # If it's roughly 1 month (28-31 days), force 1/12
     if 28 <= days <= 31:
         year_ratio = 1.0 / 12.0
     
@@ -211,14 +208,13 @@ def get_budget_comparison(db: Session, start_date: datetime, end_date: datetime,
         func.sum(Transaction.amount).label('actual_amount')
     ).join(Category, Transaction.category_id == Category.id)\
      .filter(Transaction.date >= start_date, Transaction.date <= end_date)\
-     .filter(Transaction.amount < 0) # Expenses only for budget comparison
+     .filter(Transaction.amount < 0)
     
     if not include_excluded:
         actuals_query = actuals_query.filter(Transaction.is_excluded == False)
         
     actuals_rows = actuals_query.group_by(Category.id).all()
     
-    # Map scsc_id -> actual (positive value for spend)
     actuals_map = {r.scsc_id: abs(r.actual_amount) for r in actuals_rows}
     category_info = {r.scsc_id: {'section': r.section, 'category': r.category} for r in actuals_rows}
     
@@ -226,7 +222,6 @@ def get_budget_comparison(db: Session, start_date: datetime, end_date: datetime,
     budgets = db.query(Budget).all()
     budget_map = {b.scsc_id: b.amount for b in budgets}
     
-    # Also need category info for budgeted items that have no spending
     all_categories = db.query(Category).all()
     for c in all_categories:
         if c.id not in category_info:
@@ -239,15 +234,12 @@ def get_budget_comparison(db: Session, start_date: datetime, end_date: datetime,
     
     for scsc_id in all_ids:
         annual_budget = budget_map.get(scsc_id, 0.0)
-        
-        # Scale to period
         period_budget = annual_budget * year_ratio
         
         actual = actuals_map.get(scsc_id, 0.0)
         info = category_info.get(scsc_id, {'section': 'Unknown', 'category': 'Unknown'})
         
         variance = period_budget - actual
-        # Variance %
         variance_pct = (variance / period_budget * 100) if period_budget > 0 else 0
         
         status = 'On Track'
@@ -260,7 +252,7 @@ def get_budget_comparison(db: Session, start_date: datetime, end_date: datetime,
             'scsc_id': scsc_id,
             'section': info['section'],
             'category': info['category'],
-            'budgeted': period_budget, # This is now Period Budget (e.g. Monthly)
+            'budgeted': period_budget, 
             'annual_budget': annual_budget,
             'actual': actual,
             'variance': variance,
@@ -269,3 +261,59 @@ def get_budget_comparison(db: Session, start_date: datetime, end_date: datetime,
         })
         
     return data
+
+def get_budget_progress(db: Session, year: int, month: int, include_excluded=False):
+    """
+    Returns Section-level aggregated budget vs actuals for a specific month.
+    This uses ANNUAL budget / 12.
+    """
+    start_date = datetime(year, month, 1)
+    if month == 12:
+        end_date = datetime(year + 1, 1, 1)
+    else:
+        end_date = datetime(year, month + 1, 1)
+        
+    # 1. Get Actuals (Expenses grouped by Section)
+    actuals_query = db.query(
+        Category.section,
+        func.sum(Transaction.amount)
+    ).join(Category, Transaction.category_id == Category.id)\
+     .filter(Transaction.date >= start_date, Transaction.date < end_date)\
+     .filter(Transaction.amount < 0)
+
+    if not include_excluded:
+        actuals_query = actuals_query.filter(Transaction.is_excluded == False)
+
+    actuals_res = actuals_query.group_by(Category.section).all()
+     
+    actual_map = {r[0]: abs(r[1]) for r in actuals_res}
+    
+    # 2. Get Budgets (grouped by Section) - ANNUAL
+    budget_res = db.query(
+        Category.section,
+        func.sum(Budget.amount)
+    ).join(Category, Budget.scsc_id == Category.id)\
+     .group_by(Category.section).all()
+     
+    # Convert Annual to Monthly
+    budget_map = {r[0]: (r[1] / 12) for r in budget_res}
+    
+    # 3. Merge
+    all_sections = set(actual_map.keys()) | set(budget_map.keys())
+    
+    progress_data = []
+    for section in sorted(list(all_sections)):
+        spent = actual_map.get(section, 0.0)
+        target = budget_map.get(section, 0.0)
+        
+        if spent < 0.01 and target < 0.01:
+            continue
+            
+        progress_data.append({
+            'section': section,
+            'spent': spent,
+            'budget': target,
+            'percent': (spent / target * 100) if target > 0 else 0
+        })
+        
+    return progress_data
