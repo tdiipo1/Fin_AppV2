@@ -155,8 +155,7 @@ def get_monthly_transactions(db: Session, year: int, month: int, type: str, incl
 
 def calculate_category_baselines(db: Session, months: int = 12) -> dict:
     """
-    Calculates average monthly spending per category over the last N months.
-    Returns {scsc_id: average_amount}
+    Calculates Annual Spending Baseline (Monthly Average * 12).
     """
     end_date = datetime.now()
     start_date = end_date - timedelta(days=30*months)
@@ -176,17 +175,34 @@ def calculate_category_baselines(db: Session, months: int = 12) -> dict:
     baselines = {}
     for r in results:
         total_spend = abs(r[1])
-        avg_spend = total_spend / months
-        # Round to 2 decimals
-        baselines[r[0]] = round(avg_spend, 2)
+        avg_monthly_spend = total_spend / months
+        
+        # Annualize
+        annual_projection = avg_monthly_spend * 12
+        
+        # Round to nearest 100 as requested
+        # e.g. 1140 -> 1100, 1160 -> 1200
+        rounded_annual = round(annual_projection / 100) * 100
+        
+        baselines[r[0]] = rounded_annual
         
     return baselines
 
 def get_budget_comparison(db: Session, start_date: datetime, end_date: datetime, include_excluded=False):
     """
     Compares Actual Spending vs Budget Logic.
-    Returns detailed list for table and charts.
+    Budget amounts in DB are ANNUAL.
+    We must scale them to the requested time period.
     """
+    # Calculate Time Factor (Ratio of Year)
+    # Simple approximation: days / 365
+    days = (end_date - start_date).days
+    year_ratio = days / 365.0
+    
+    # Alternatively, if it's roughly 1 month (28-31 days), force 1/12 for cleanliness
+    if 28 <= days <= 31:
+        year_ratio = 1.0 / 12.0
+    
     # 1. Get Actual Spending by Category for the period
     actuals_query = db.query(
         Category.id.label('scsc_id'),
@@ -195,8 +211,7 @@ def get_budget_comparison(db: Session, start_date: datetime, end_date: datetime,
         func.sum(Transaction.amount).label('actual_amount')
     ).join(Category, Transaction.category_id == Category.id)\
      .filter(Transaction.date >= start_date, Transaction.date <= end_date)\
-     .filter(Transaction.amount < 0) # Expenses only for budget comparison? 
-     # Usually budgets are for expenses.
+     .filter(Transaction.amount < 0) # Expenses only for budget comparison
     
     if not include_excluded:
         actuals_query = actuals_query.filter(Transaction.is_excluded == False)
@@ -207,7 +222,7 @@ def get_budget_comparison(db: Session, start_date: datetime, end_date: datetime,
     actuals_map = {r.scsc_id: abs(r.actual_amount) for r in actuals_rows}
     category_info = {r.scsc_id: {'section': r.section, 'category': r.category} for r in actuals_rows}
     
-    # 2. Get All Budgets
+    # 2. Get All Budgets (ANNUAL amounts)
     budgets = db.query(Budget).all()
     budget_map = {b.scsc_id: b.amount for b in budgets}
     
@@ -223,25 +238,30 @@ def get_budget_comparison(db: Session, start_date: datetime, end_date: datetime,
     data = []
     
     for scsc_id in all_ids:
-        budgeted = budget_map.get(scsc_id, 0.0)
+        annual_budget = budget_map.get(scsc_id, 0.0)
+        
+        # Scale to period
+        period_budget = annual_budget * year_ratio
+        
         actual = actuals_map.get(scsc_id, 0.0)
         info = category_info.get(scsc_id, {'section': 'Unknown', 'category': 'Unknown'})
         
-        variance = budgeted - actual
-        # Variance %: If budget is 0, undefined (0%).
-        variance_pct = (variance / budgeted * 100) if budgeted > 0 else 0
+        variance = period_budget - actual
+        # Variance %
+        variance_pct = (variance / period_budget * 100) if period_budget > 0 else 0
         
         status = 'On Track'
         if variance < 0:
             status = 'Over Budget'
-        elif variance > 0 and budgeted > 0:
+        elif variance > 0 and period_budget > 0:
             status = 'Under Budget'
             
         data.append({
             'scsc_id': scsc_id,
             'section': info['section'],
             'category': info['category'],
-            'budgeted': budgeted,
+            'budgeted': period_budget, # This is now Period Budget (e.g. Monthly)
+            'annual_budget': annual_budget,
             'actual': actual,
             'variance': variance,
             'variance_pct': variance_pct,

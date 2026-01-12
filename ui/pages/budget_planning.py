@@ -131,13 +131,14 @@ def budget_planning_page():
 
     @ui.refreshable
     def render_summary():
-        total_budgeted = sum(s.budgets.values())
-        surplus = s.available_money - total_budgeted
+        # Values are Annual
+        total_annual_budget = sum(s.budgets.values())
+        surplus = s.available_money - total_annual_budget
         
         with ui.card().classes('w-full mb-4 p-4 bg-gray-50'):
             with ui.row().classes('w-full items-center justify-between'):
                 with ui.column():
-                    ui.label("Available Money").classes('text-sm text-gray-500')
+                    ui.label("Est. Annual Income").classes('text-sm text-gray-500')
                     
                     def set_avail(e):
                         try:
@@ -145,16 +146,16 @@ def budget_planning_page():
                             render_summary.refresh()
                         except: pass
                         
-                    ui.number(value=s.available_money, format='%.2f', on_change=set_avail).classes('text-xl font-bold')
+                    ui.number(value=s.available_money, format='%.0f', step=100, on_change=set_avail).classes('text-xl font-bold')
                 
                 with ui.column():
-                    ui.label("Total Budgeted").classes('text-sm text-gray-500')
-                    ui.label(f"${total_budgeted:,.2f}").classes('text-xl font-bold')
+                    ui.label("Total Annual Budget").classes('text-sm text-gray-500')
+                    ui.label(f"${total_annual_budget:,.0f}").classes('text-xl font-bold')
                     
                 with ui.column():
-                    ui.label("Projected Surplus").classes('text-sm text-gray-500')
+                    ui.label("Projected Annual Surplus").classes('text-sm text-gray-500')
                     color = 'text-green-600' if surplus >= 0 else 'text-red-600'
-                    ui.label(f"${surplus:,.2f}").classes(f'text-xl font-bold {color}')
+                    ui.label(f"${surplus:,.0f}").classes(f'text-xl font-bold {color}')
 
     @ui.refreshable
     def render_grid():
@@ -166,7 +167,7 @@ def budget_planning_page():
                 cats = s.sections[section]
                 section_total = sum(s.budgets.get(c.id, 0.0) for c in cats)
                 
-                with ui.expansion(f"{section} (${section_total:,.0f})", icon='folder').classes('w-full bg-white border'):
+                with ui.expansion(f"{section} (${section_total:,.0f}/yr)", icon='folder').classes('w-full bg-white border'):
                     with ui.column().classes('w-full p-2'):
                         for c in cats:
                             with ui.row().classes('w-full items-center gap-4 py-1 hover:bg-gray-50'):
@@ -176,7 +177,7 @@ def budget_planning_page():
                                 
                                 # Input
                                 current_val = s.budgets.get(c.id, 0.0)
-                                inp = ui.number(value=current_val, format='%.2f', min=0)\
+                                inp = ui.number(value=current_val, format='%.0f', min=0, step=100)\
                                     .props('dense outlined suffix="$"')\
                                     .classes('w-32')\
                                     .on('change', lambda e, cid=c.id: handle_budget_change(cid, e.value))
@@ -184,9 +185,9 @@ def budget_planning_page():
                                 # Baseline Helper
                                 base = s.baselines.get(c.id, 0.0)
                                 if base > 0 and current_val == 0:
-                                    ui.button(f"Avg: ${base:.0f}", on_click=lambda _, cid=c.id, i=inp: use_baseline(cid, i))\
+                                    ui.button(f"Avg: ${base:,.0f}", on_click=lambda _, cid=c.id, i=inp: use_baseline(cid, i))\
                                       .props('flat dense size=sm color=grey') \
-                                      .tooltip("Click to use 12-month average")
+                                      .tooltip("Click to use historical annual average")
         
     # --- Page Layout ---
     
