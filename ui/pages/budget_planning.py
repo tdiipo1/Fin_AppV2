@@ -58,12 +58,14 @@ def budget_planning_page():
                     BudgetService.update_budget(scsc_id, amt, note, db=db)
             
             s.modified_ids.clear()
-            n.dismiss()
+            try: n.dismiss() 
+            except: pass
             ui.notify("Budgets saved successfully!", type='positive')
             render_summary.refresh() # Update surplus
             
         except Exception as e:
-            n.dismiss()
+            try: n.dismiss()
+            except: pass
             ui.notify(f"Error saving: {e}", type='negative')
 
     async def reset_changes():
@@ -177,10 +179,10 @@ def budget_planning_page():
                                 
                                 # Input
                                 current_val = s.budgets.get(c.id, 0.0)
-                                inp = ui.number(value=current_val, format='%.0f', min=0, step=100)\
+                                inp = ui.number(value=current_val, format='%.0f', min=0, step=100, 
+                                                on_change=lambda e, cid=c.id: handle_budget_change(cid, e.value))\
                                     .props('dense outlined suffix="$"')\
-                                    .classes('w-32')\
-                                    .on('change', lambda e, cid=c.id: handle_budget_change(cid, e.value))
+                                    .classes('w-32')
                                 
                                 # Baseline Helper
                                 base = s.baselines.get(c.id, 0.0)
