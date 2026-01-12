@@ -4,7 +4,7 @@ import asyncio
 from services.budget_service import BudgetService
 from services.analytics import calculate_category_baselines
 from database.connection import get_db, SessionLocal
-from database.models import Category
+from database.models import Category, AppSettings
 from io import BytesIO
 
 def budget_planning_page():
@@ -20,6 +20,7 @@ def budget_planning_page():
             self.sections = {} # {section: [categories]}
             self.modified_ids = set()
             self.loading = False
+            self.income_modified = False
 
     s = BudgetState()
 
@@ -42,7 +43,15 @@ def budget_planning_page():
             # Load Baselines
             s.baselines = calculate_category_baselines(db)
             
+            # Load Income Setting
+            setting = db.query(AppSettings).filter(AppSettings.key == 'annual_income').first()
+            if setting and setting.value:
+                try:
+                    s.available_money = float(setting.value)
+                except: pass
+            
             s.modified_ids.clear()
+            s.income_modified = False
             
     load_data()
     
@@ -52,12 +61,24 @@ def budget_planning_page():
         n = ui.notify("Saving budgets...", type='ongoing')
         try:
             with SessionLocal() as db:
+                # Save Budgets
                 for scsc_id in s.modified_ids:
                     amt = s.budgets.get(scsc_id, 0.0)
                     note = s.notes.get(scsc_id, "")
                     BudgetService.update_budget(scsc_id, amt, note, db=db)
+                
+                # Save Income if changed
+                if s.income_modified:
+                    setting = db.query(AppSettings).filter(AppSettings.key == 'annual_income').first()
+                    if not setting:
+                        setting = AppSettings(key='annual_income', value=str(s.available_money))
+                        db.add(setting)
+                    else:
+                        setting.value = str(s.available_money)
+                    db.commit()
             
             s.modified_ids.clear()
+            s.income_modified = False
             try: n.dismiss() 
             except: pass
             ui.notify("Budgets saved successfully!", type='positive')
@@ -145,6 +166,7 @@ def budget_planning_page():
                     def set_avail(e):
                         try:
                             s.available_money = float(e.value)
+                            s.income_modified = True
                             render_summary.refresh()
                         except: pass
                         

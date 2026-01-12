@@ -128,5 +128,15 @@ class SystemLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
     level = Column(String, default="INFO")
+    
+class AppSettings(Base):
+    """
+    Store key-value pairs for application settings.
+    """
+    __tablename__ = "app_settings"
+    
+    key = Column(String, primary_key=True, index=True)
+    value = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     component = Column(String) # 'simplefin', 'importer', 'ai'
     message = Column(String)
