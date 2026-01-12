@@ -47,8 +47,11 @@ class Budget(Base):
     __tablename__ = "budgets"
     
     id = Column(Integer, primary_key=True, index=True)
-    scsc_id = Column(String, ForeignKey("categories.id"), nullable=False)
+    scsc_id = Column(String, ForeignKey("categories.id"), nullable=False, unique=True)
     amount = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    note = Column(String, nullable=True)
     
     category = relationship("Category", back_populates="budgets")
 

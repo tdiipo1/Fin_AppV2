@@ -3,7 +3,7 @@ import os
 from database.connection import init_db
 from services.backup import perform_daily_backup
 from ui.layout import frame
-from ui.pages import dashboard, transactions, import_page, excluded, batch_exclude, merchant_intelligence, import_mappings
+from ui.pages import dashboard, transactions, import_page, excluded, batch_exclude, merchant_intelligence, import_mappings, budget_planning, spending_report
 
 # --- BACKUP SYSTEM ---
 # Run daily backup on startup to ensure data is safe locally
@@ -43,6 +43,14 @@ def intelligence_page():
 @ui.page('/mappings')
 def mappings_page():
     frame('mappings', import_mappings.content)
+
+@ui.page('/budget')
+def budget_page():
+    frame('budget', budget_planning.budget_planning_page)
+
+@ui.page('/spending')
+def spending_page():
+    frame('spending', spending_report.spending_report_page)
 
 @ui.page('/settings')
 def settings_page():

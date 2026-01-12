@@ -27,6 +27,8 @@ def frame(active_tab: str, content_func):
             nav_link('Dashboard', '/', 'dashboard', active_tab == 'dashboard')
             nav_link('Analytics', '/intelligence', 'insights', active_tab == 'intelligence')
             nav_link('Transactions', '/transactions', 'receipt_long', active_tab == 'transactions')
+            nav_link('Budget', '/budget', 'account_balance_wallet', active_tab == 'budget')
+            nav_link('Spending', '/spending', 'pie_chart', active_tab == 'spending')
             nav_link('Import', '/import', 'upload_file', active_tab == 'import')
             nav_link('Mappings', '/mappings', 'map', active_tab == 'mappings')
             nav_link('Exclusions', '/excluded', 'visibility_off', active_tab in ['excluded', 'batch_exclude'])
