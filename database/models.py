@@ -140,3 +140,17 @@ class AppSettings(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     component = Column(String) # 'simplefin', 'importer', 'ai'
     message = Column(String)
+
+class StagedTransaction(Base):
+    __tablename__ = 'staged_transactions'
+    
+    id = Column(Integer, primary_key=True)
+    external_id = Column(String, unique=True, index=True) # The unique ID from SimpleFin (account_id + transaction_id)
+    date = Column(DateTime)
+    description = Column(String) # The raw description
+    amount = Column(Float)
+    account_name = Column(String) # e.g. "Chase - Checking"
+    status = Column(String, default="pending") # "pending", "approved", "rejected"
+    
+    # Metadata
+    fetched_at = Column(DateTime, default=datetime.utcnow)

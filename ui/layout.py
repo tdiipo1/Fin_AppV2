@@ -30,6 +30,7 @@ def frame(active_tab: str, content_func):
             nav_link('Budget', '/budget', 'account_balance_wallet', active_tab == 'budget')
             nav_link('Spending', '/spending', 'pie_chart', active_tab == 'spending')
             nav_link('Import', '/import', 'upload_file', active_tab == 'import')
+            nav_link('Bank Sync', '/sync', 'sync_alt', active_tab == 'sync')
             nav_link('Mappings', '/mappings', 'map', active_tab == 'mappings')
             nav_link('Exclusions', '/excluded', 'visibility_off', active_tab in ['excluded', 'batch_exclude'])
             
