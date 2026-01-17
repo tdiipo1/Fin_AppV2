@@ -32,6 +32,41 @@ def check_exclusion(description: str, rules: list) -> bool:
                 continue # Skip invalid regex
     return False
 
+def apply_mapping_rules(tx: Transaction, db: Session):
+    """
+    Refactored helper: Applies Merchant Maps and Category Maps to a Transaction object.
+    Does NOT commit.
+    """
+    # 1. Normalization (Merchant Map)
+    # Match raw_description against MerchantMap
+    # Note: MerchantMap stores exact raw descriptions. 
+    # For robust matching, we might want "contains" logic in the database, 
+    # but currently V1 logic is exact match on `raw_description` OR we do the cleaning here.
+    
+    # Let's try to find an exact match first on description
+    m_map = db.query(MerchantMap).filter(MerchantMap.raw_description == tx.description).first()
+    
+    if m_map and m_map.is_active:
+        tx.standardized_merchant = m_map.standardized_merchant
+        tx.merchant_map_id = m_map.id
+        tx.clean_description = m_map.standardized_merchant # Update display desc
+    else:
+        # Fallback: Just clean the string if no map
+        # Simplified cleaning here or use AI service later
+        tx.clean_description = tx.description 
+
+    # 2. Categorization (Category Map)
+    # Match description against CategoryMap 'unmapped_description'
+    c_map = db.query(CategoryMap).filter(CategoryMap.unmapped_description == tx.description).first()
+    
+    # If not found by exact desc, try by standardized merchant
+    if not c_map and tx.standardized_merchant:
+        c_map = db.query(CategoryMap).filter(CategoryMap.unmapped_description == tx.standardized_merchant).first()
+
+    if c_map and c_map.is_active:
+        tx.category_id = c_map.scsc_id
+        tx.category_map_id = c_map.id
+
 def generate_fingerprint(date_dt: datetime, amount: float, description: str):
     """
     Generates a deterministic SHA256 hash for a transaction.

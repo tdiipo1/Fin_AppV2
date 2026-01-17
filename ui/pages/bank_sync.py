@@ -227,4 +227,4 @@ def bank_sync_page():
         }).classes('w-full h-96')
         
         # Init
-        await refresh_grid()
+        ui.timer(0.1, refresh_grid, once=True)
